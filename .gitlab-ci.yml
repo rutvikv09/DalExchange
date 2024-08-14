@@ -1,0 +1,146 @@
+stages:
+  - build
+  - test
+  - publish
+  - deploy
+
+variables:
+  MAVEN_OPTS: "-Dmaven.repo.local=$CI_PROJECT_DIR/backend/.m2/repository"
+
+cache:
+  paths:
+    - $CI_PROJECT_DIR/backend/.m2/repository
+
+backend_build:
+  stage: build
+  image: maven:3.9.7-sapmachine-17
+  before_script:
+    - cd backend/
+  script:
+    - echo "Backend Build Started"
+    - mvn clean install
+    - echo "Backend Build Completed"
+  artifacts:
+    paths:
+      - backend/target
+  only:
+    - main
+    - develop
+  tags:
+    - dalfcs_gitlab_docker_ci
+
+frontend_build:
+  stage: build
+  image: node:latest
+  before_script:
+    - cd frontend/
+  script:
+    - echo "Frontend Build Started"
+    - npm cache clean --force
+    - npm install
+    - npm run build
+    - echo "Frontend Build Completed"
+  artifacts:
+    paths:
+      - frontend/build
+  only:
+    - main
+    - develop
+  tags:
+    - dalfcs_gitlab_docker_ci
+
+backend_test:
+  stage: test
+  image: maven:3.9.7-sapmachine-17
+  before_script:
+    - cd backend/
+  script:
+    - echo "Backend tests Started"
+    - mvn test
+    - echo "Backend Tests Completed"
+  only:
+    - main
+    - develop
+  tags:
+    - dalfcs_gitlab_docker_ci
+
+publish_backend:
+  stage: publish
+  image: docker:latest
+  variables:
+    DOCKER_HOST: tcp://docker:2375
+    DOCKER_TLS_CERTDIR: ""
+  services:
+    - docker:dind
+  before_script:
+    - cd backend/
+  script:
+    - echo $DOCKER_HOST
+    - docker --version
+    - echo "Docker Login started"
+    - docker login -u $DOCKER_USERNAME -p $DOCKER_PASSWORD docker.io
+    - echo "Docker Login completed"
+    - echo "Started building image for backend"
+    - docker build -t docker.io/$DOCKER_USERNAME/backend .
+    - echo "Image build completed for backend"
+    - echo "Started pushing image to docker hub"
+    - docker push docker.io/$DOCKER_USERNAME/backend
+    - echo "Pushed image to docker hub @$DOCKER_USERNAME:backend"
+  after_script:
+    - docker logout
+  only:
+    - main
+  tags:
+    - dalfcs_gitlab_docker_ci
+
+publish_frontend:
+  stage: publish
+  image: docker:latest
+  variables:
+    DOCKER_HOST: tcp://docker:2375
+    DOCKER_TLS_CERTDIR: ""
+  services:
+    - docker:dind
+  before_script:
+    - cd frontend/
+  script:
+    - echo $DOCKER_HOST
+    - docker --version
+    - echo "Docker Login started"
+    - docker login -u $DOCKER_USERNAME -p $DOCKER_PASSWORD docker.io
+    - echo "Docker Login completed"
+    - echo "Started building image for backend"
+    - docker build -t docker.io/$DOCKER_USERNAME/frontend .
+    - echo "Image build completed for frontend"
+    - echo "Started pushing image to docker hub"
+    - docker push docker.io/$DOCKER_USERNAME/frontend
+    - echo "Pushed Image to docker hub @$DOCKER_USERNAME:frontend"
+  after_script:
+    - docker logout
+  only:
+    - main
+  tags:
+    - dalfcs_gitlab_docker_ci
+
+deploy_backend:
+  image: alpine:latest
+  stage: deploy
+  tags:
+    - dalfcs_gitlab_docker_ci
+  script:
+    - echo "Deploying Backend..."
+    - apk update && apk add openssh-client sshpass
+    - sudo apt-get install sshpass || true
+    - which ssh || true
+    - which sshpass || true
+    - sshpass -p $VM_PWD ssh -o StrictHostKeyChecking=no student@$SERVER_NAME "docker login -u $DOCKER_USERNAME -p $DOCKER_PASSWORD docker.io"
+    - sshpass -p $VM_PWD ssh -o StrictHostKeyChecking=no student@$SERVER_NAME "docker pull docker.io/$DOCKER_USERNAME/backend"
+    - sshpass -p $VM_PWD ssh -o StrictHostKeyChecking=no student@$SERVER_NAME "docker pull docker.io/$DOCKER_USERNAME/frontend"
+    - sshpass -p $VM_PWD ssh -o StrictHostKeyChecking=no student@$SERVER_NAME "docker container rm -f backend || true"
+    - sshpass -p $VM_PWD ssh -o StrictHostKeyChecking=no student@$SERVER_NAME "docker container rm -f frontend || true"
+    - sshpass -p $VM_PWD ssh -o StrictHostKeyChecking=no student@$SERVER_NAME "docker run -d -p 8080:8080 --name backend docker.io/$DOCKER_USERNAME/backend"
+    - sshpass -p $VM_PWD ssh -o StrictHostKeyChecking=no student@$SERVER_NAME "docker run -d -p 80:80 --name frontend docker.io/$DOCKER_USERNAME/frontend"
+    - sshpass -p $VM_PWD ssh -o StrictHostKeyChecking=no student@$SERVER_NAME "docker images -a"
+    - sshpass -p $VM_PWD ssh -o StrictHostKeyChecking=no student@$SERVER_NAME "docker container ls -a"
+  only:
+    - main
